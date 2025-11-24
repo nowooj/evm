@@ -57,8 +57,8 @@ func EmitTxHashEvent(ctx sdk.Context, msg *evmtypes.MsgEthereumTx, blockTxIndex,
 	ctx.EventManager().EmitEvent(
 		sdk.NewEvent(
 			evmtypes.EventTypeEthereumTx,
-			sdk.NewAttribute(evmtypes.AttributeKeyEthereumTxHash, msg.Hash().String()),
-			sdk.NewAttribute(evmtypes.AttributeKeyTxIndex, strconv.FormatUint(blockTxIndex+msgIndex, 10)), // #nosec G115
+			sdk.NewAttribute(evmtypes.AttributeKeyEthereumTxHash, msg.AsTransaction().Hash().String()),
+			sdk.NewAttribute(evmtypes.AttributeKeyTxIndex, strconv.FormatUint(blockTxIndex, 10)), // #nosec G115
 		),
 	)
 }
