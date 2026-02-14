@@ -740,3 +740,7 @@ func (s *StateDB) commitWithCtx(ctx sdk.Context) error {
 	}
 	return nil
 }
+
+func (s *StateDB) GetModifiedAddresses() []common.Address {
+	return s.journal.sortedDirties()
+}
