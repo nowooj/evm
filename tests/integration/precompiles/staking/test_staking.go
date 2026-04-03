@@ -10,6 +10,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/holiman/uint256"
 
+	cmn "github.com/cosmos/evm/precompiles/common"
 	"github.com/cosmos/evm/precompiles/staking"
 	"github.com/cosmos/evm/precompiles/testutil"
 	chainutil "github.com/cosmos/evm/testutil"
@@ -127,13 +128,14 @@ func (s *PrecompileTestSuite) TestRequiredGas() {
 // TestRun tests the precompile's Run method.
 func (s *PrecompileTestSuite) TestRun() {
 	var ctx sdk.Context
+
 	testcases := []struct {
-		name        string
-		malleate    func(delegator keyring.Key) []byte
-		gas         uint64
-		readOnly    bool
-		expPass     bool
-		errContains string
+		name      string
+		malleate  func(delegator keyring.Key) []byte
+		gas       uint64
+		readOnly  bool
+		expPass   bool
+		wantErrFn func() error
 	}{
 		{
 			"fail - contract gas limit is < gas cost to run a query / tx",
@@ -150,7 +152,11 @@ func (s *PrecompileTestSuite) TestRun() {
 			8000,
 			false,
 			false,
-			"out of gas",
+			func() error {
+				bz, err := evmtypes.RevertReasonBytes(vm.ErrOutOfGas.Error())
+				s.Require().NoError(err)
+				return evmtypes.NewExecErrorWithReason(bz)
+			},
 		},
 		{
 			"pass - delegate transaction",
@@ -167,7 +173,7 @@ func (s *PrecompileTestSuite) TestRun() {
 			1000000,
 			false,
 			true,
-			"",
+			nil,
 		},
 		{
 			"pass - undelegate transaction",
@@ -184,7 +190,7 @@ func (s *PrecompileTestSuite) TestRun() {
 			1000000,
 			false,
 			true,
-			"",
+			nil,
 		},
 		{
 			"pass - redelegate transaction",
@@ -202,7 +208,7 @@ func (s *PrecompileTestSuite) TestRun() {
 			1000000,
 			false,
 			true,
-			"failed to redelegate tokens",
+			nil,
 		},
 		{
 			"pass - cancel unbonding delegation transaction",
@@ -242,7 +248,7 @@ func (s *PrecompileTestSuite) TestRun() {
 			1000000,
 			false,
 			true,
-			"",
+			nil,
 		},
 		{
 			"pass - delegation query",
@@ -258,7 +264,7 @@ func (s *PrecompileTestSuite) TestRun() {
 			1000000,
 			false,
 			true,
-			"",
+			nil,
 		},
 		{
 			"pass - validator query",
@@ -276,7 +282,7 @@ func (s *PrecompileTestSuite) TestRun() {
 			1000000,
 			false,
 			true,
-			"",
+			nil,
 		},
 		{
 			"pass - redelgation query",
@@ -314,7 +320,7 @@ func (s *PrecompileTestSuite) TestRun() {
 			1000000,
 			false,
 			true,
-			"",
+			nil,
 		},
 		{
 			"pass - delegation query - read only",
@@ -330,7 +336,7 @@ func (s *PrecompileTestSuite) TestRun() {
 			1000000,
 			true,
 			true,
-			"",
+			nil,
 		},
 		{
 			"pass - unbonding delegation query",
@@ -368,7 +374,7 @@ func (s *PrecompileTestSuite) TestRun() {
 			1000000,
 			true,
 			true,
-			"",
+			nil,
 		},
 		{
 			"fail - delegate method - read only",
@@ -385,7 +391,10 @@ func (s *PrecompileTestSuite) TestRun() {
 			21559, // use enough gas to avoid out of gas error
 			true,
 			false,
-			"write protection",
+			func() error {
+				s.T().Helper()
+				return cmn.NewRevertWithSolidityError(staking.ABI, cmn.SolidityErrABISetupFailed, vm.ErrWriteProtection.Error())
+			},
 		},
 		{
 			"fail - invalid method",
@@ -395,7 +404,12 @@ func (s *PrecompileTestSuite) TestRun() {
 			21559, // use enough gas to avoid out of gas error
 			false,
 			false,
-			"no method with id",
+			func() error {
+				s.T().Helper()
+				_, err := staking.ABI.MethodById([]byte("invalid")[:4])
+				s.Require().Error(err)
+				return cmn.NewRevertWithSolidityError(staking.ABI, cmn.SolidityErrABISetupFailed, err.Error())
+			},
 		},
 	}
 
@@ -460,9 +474,8 @@ func (s *PrecompileTestSuite) TestRun() {
 				s.Require().NotNil(bz, "expected returned bytes not to be nil")
 			} else {
 				s.Require().Error(err, "expected error to be returned when running the precompile")
-				s.Require().NotNil(bz, "expected returned bytes to be nil")
-				execRevertErr := evmtypes.NewExecErrorWithReason(bz)
-				s.Require().ErrorContains(execRevertErr, tc.errContains)
+				s.Require().NotNil(bz, "expected returned bytes not to be nil")
+				testutil.RequireExactError(s.T(), evmtypes.NewExecErrorWithReason(bz), tc.wantErrFn())
 				consumed := ctx.GasMeter().GasConsumed()
 				s.Require().Greater(consumed, uint64(0), "expected gas to be consumed")
 			}
@@ -725,7 +738,7 @@ func (s *PrecompileTestSuite) TestCMS() {
 			100000, // use gas > 0 to avoid doing gas estimation
 			false,
 			true,
-			"no method with id",
+			vm.ErrExecutionReverted.Error(),
 		},
 	}
 
@@ -799,7 +812,7 @@ func (s *PrecompileTestSuite) TestCMS() {
 						"expected error to be returned when running the precompile")
 					s.Require().NotNil(resp.Ret, "expected returned bytes to be encoded error reason")
 					execRevertErr := evmtypes.NewExecErrorWithReason(resp.Ret)
-					s.Require().Contains(execRevertErr.Error(), tc.errContains)
+					s.Require().ErrorContains(execRevertErr, tc.errContains)
 
 					consumed := ctx.GasMeter().GasConsumed()
 					// Because opCall (for calling precompile) return ErrExecutionReverted, leftOverGas is refunded.
